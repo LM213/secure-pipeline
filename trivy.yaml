@@ -1,0 +1,11 @@
+severity:
+  - CRITICAL
+  - HIGH
+vuln-type:
+  - os
+  - library
+ignore-unfixed: true
+timeout: 10m
+exit-code: 1             # fail on HIGH/CRITICAL
+format: table
+ignorefile: .trivyignore
