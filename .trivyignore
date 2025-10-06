@@ -1,0 +1,5 @@
+# Example: Ignoring CVEs we’ve risk-accepted until upstream fixes land.
+# Document WHY each is ignored and when to re-check.
+
+CVE-2024-12345  # false positive in alpine base; tracked upstream, recheck monthly
+CVE-2025-00001  # dev-only dependency not shipped to prod; pinned in lockfile
