@@ -1,0 +1,103 @@
+name: CI - SonarQube & Trivy
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  quality-and-security:
+    runs-on: ubuntu-latest
+
+    services:
+      sonarqube:
+        image: sonarqube:lts-community
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd="curl -sSf http://localhost:9000/api/system/health | grep -q 'GREEN'"
+          --health-interval=15s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      SONAR_HOST_URL: http://localhost:9000
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install deps & run tests (with coverage)
+        run: |
+          npm ci
+          npm test
+
+      - name: Install SonarScanner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl
+          curl -sLo /tmp/sonar.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-6.1.0.4477-linux-x64.zip
+          sudo unzip -q /tmp/sonar.zip -d /opt
+          echo "/opt/sonar-scanner-6.1.0.4477-linux-x64/bin" >> $GITHUB_PATH
+
+      - name: Wait for SonarQube service to be ready
+        run: |
+          echo "Waiting for SonarQube..."
+          for i in {1..40}; do
+            if curl -sSf http://localhost:9000/api/system/health | grep -q 'GREEN'; then
+              echo "SonarQube is GREEN."
+              break
+            fi
+            echo "Still starting... ($i/40)"
+            sleep 5
+          done
+
+      - name: SonarQube Scan
+        run: |
+          sonar-scanner \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.login=$SONAR_TOKEN
+
+      - name: SonarQube Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://localhost:9000
+
+      - name: Build Docker image
+        run: |
+          docker build -t secure-pipeline:ci .
+
+      - name: Trivy vulnerability scan (fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: secure-pipeline:ci
+          format: 'table'
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'   # fail job on HIGH/CRITICAL
+          ignore-unfixed: true
+          timeout: '10m'
+
+      - name: Upload Trivy report (SARIF for Code Scanning)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: secure-pipeline:ci
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
